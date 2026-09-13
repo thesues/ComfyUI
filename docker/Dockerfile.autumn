@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=nvcr.m.daocloud.io/nvidia/pytorch:25.08-py3
+ARG BASE_IMAGE=hub-cache-cn-beijing.cr.volces.com/nvidia/pytorch:25.08-py3
 
 FROM ${BASE_IMAGE}
 
