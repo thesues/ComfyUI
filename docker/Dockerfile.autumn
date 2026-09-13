@@ -1,6 +1,7 @@
-ARG PYTORCH_IMAGE=hub-cache-cn-beijing.cr.volces.com/pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+ARG BASE_REGISTRY=
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
-FROM ${PYTORCH_IMAGE}
+FROM ${BASE_REGISTRY}${PYTORCH_IMAGE}
 
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
