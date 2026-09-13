@@ -1,9 +1,11 @@
-ARG BASE_REGISTRY=
-ARG PYTORCH_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+ARG BASE_REGISTRY=hub-cache-cn-beijing.cr.volces.com/
+ARG CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
-FROM ${BASE_REGISTRY}${PYTORCH_IMAGE}
+FROM ${BASE_REGISTRY}${CUDA_IMAGE}
 
+ARG APT_MIRROR=https://mirrors.aliyun.com
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 ENV PYTHONUNBUFFERED=1
@@ -11,11 +13,31 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|http://archive.ubuntu.com|${APT_MIRROR}|g; s|http://security.ubuntu.com|${APT_MIRROR}|g" /etc/apt/sources.list.d/ubuntu.sources; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt runai-model-streamer-s3
+RUN pip install --no-cache-dir --break-system-packages \
+    --timeout 120 --retries 10 \
+    --index-url ${TORCH_INDEX_URL} \
+    --extra-index-url ${PIP_INDEX_URL} \
+    torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
+RUN pip install --no-cache-dir --break-system-packages \
+    --timeout 120 --retries 10 \
+    --extra-index-url ${TORCH_INDEX_URL} \
+    -r requirements.txt \
+    runai-model-streamer-s3
 
 COPY . .
 
 EXPOSE 8188
 
-CMD ["python", "main.py", "--listen", "0.0.0.0"]
+CMD ["python3", "main.py", "--listen", "0.0.0.0"]
