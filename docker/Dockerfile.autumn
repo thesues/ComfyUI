@@ -1,0 +1,20 @@
+ARG PYTORCH_IMAGE=hub-cache-cn-beijing.cr.volces.com/pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+
+FROM ${PYTORCH_IMAGE}
+
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PYTHONUNBUFFERED=1
+ENV AWS_EC2_METADATA_DISABLED=true
+
+WORKDIR /opt/ComfyUI
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt runai-model-streamer-s3
+
+COPY . .
+
+EXPOSE 8188
+
+CMD ["python", "main.py", "--listen", "0.0.0.0"]
