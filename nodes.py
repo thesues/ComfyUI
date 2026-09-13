@@ -53,6 +53,27 @@ def interrupt_processing(value=True):
 
 MAX_RESOLUTION=16384
 
+def validate_autumn_uri(uri, label):
+    if not comfy.utils.is_autumn_path(uri):
+        raise ValueError("{} URI must start with autumn:// or s3://.".format(label))
+
+def model_options_for_weight_dtype(weight_dtype):
+    model_options = {}
+    if weight_dtype == "fp8_e4m3fn":
+        model_options["dtype"] = torch.float8_e4m3fn
+    elif weight_dtype == "fp8_e4m3fn_fast":
+        model_options["dtype"] = torch.float8_e4m3fn
+        model_options["fp8_optimizations"] = True
+    elif weight_dtype == "fp8_e5m2":
+        model_options["dtype"] = torch.float8_e5m2
+    return model_options
+
+def model_options_for_load_device(device):
+    model_options = {}
+    if device == "cpu":
+        model_options["load_device"] = model_options["offload_device"] = torch.device("cpu")
+    return model_options
+
 class CLIPTextEncode(ComfyNodeABC):
     @classmethod
     def INPUT_TYPES(s) -> InputTypeDict:
@@ -636,6 +657,29 @@ class CheckpointLoaderSimple:
         out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
         return out[:3]
 
+class AutumnCheckpointLoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model_uri": ("STRING", {"default": "autumn://autumn/models/checkpoints/model.safetensors"}),
+            }
+        }
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    OUTPUT_TOOLTIPS = ("The model used for denoising latents.",
+                       "The CLIP model used for encoding text prompts.",
+                       "The VAE model used for encoding and decoding images to and from latent space.")
+    FUNCTION = "load_checkpoint"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads a safetensors checkpoint from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "load checkpoint", "checkpoint", "model loader"]
+
+    def load_checkpoint(self, model_uri):
+        validate_autumn_uri(model_uri, "Autumn checkpoint")
+        out = comfy.sd.load_checkpoint_guess_config(model_uri, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
+        return out[:3]
+
 class DiffusersLoader:
     SEARCH_ALIASES = ["load diffusers model"]
 
@@ -753,6 +797,47 @@ class LoraLoader:
         model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip, lora_metadata=lora_metadata)
         return (model_lora, clip_lora)
 
+class AutumnLoraLoader(LoraLoader):
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL", {"tooltip": "The diffusion model the LoRA will be applied to."}),
+                "clip": ("CLIP", {"tooltip": "The CLIP model the LoRA will be applied to."}),
+                "lora_uri": ("STRING", {"default": "autumn://autumn/models/loras/model.safetensors"}),
+                "strength_model": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01, "tooltip": "How strongly to modify the diffusion model. This value can be negative."}),
+                "strength_clip": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01, "tooltip": "How strongly to modify the CLIP model. This value can be negative."}),
+            }
+        }
+    RETURN_TYPES = ("MODEL", "CLIP")
+    OUTPUT_TOOLTIPS = ("The modified diffusion model.", "The modified CLIP model.")
+    FUNCTION = "load_lora"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads a safetensors LoRA from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "lora", "load lora", "apply lora", "lora loader", "lora model"]
+
+    def load_lora(self, model, clip, lora_uri, strength_model, strength_clip):
+        if strength_model == 0 and strength_clip == 0:
+            return (model, clip)
+        validate_autumn_uri(lora_uri, "Autumn LoRA")
+
+        lora = None
+        lora_metadata = None
+        if self.loaded_lora is not None:
+            if self.loaded_lora[0] == lora_uri:
+                lora = self.loaded_lora[1]
+                lora_metadata = self.loaded_lora[2] if len(self.loaded_lora) > 2 else None
+            else:
+                self.loaded_lora = None
+
+        if lora is None:
+            lora, lora_metadata = comfy.utils.load_torch_file(lora_uri, safe_load=True, return_metadata=True)
+            self.loaded_lora = (lora_uri, lora, lora_metadata)
+
+        model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip, lora_metadata=lora_metadata)
+        return (model_lora, clip_lora)
+
 class LoraLoaderModelOnly(LoraLoader):
     @classmethod
     def INPUT_TYPES(s):
@@ -767,6 +852,21 @@ class LoraLoaderModelOnly(LoraLoader):
 
     def load_lora_model_only(self, model, lora_name, strength_model):
         return (self.load_lora(model, None, lora_name, strength_model, 0)[0],)
+
+class AutumnLoraLoaderModelOnly(AutumnLoraLoader):
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "model": ("MODEL",),
+                              "lora_uri": ("STRING", {"default": "autumn://autumn/models/loras/model.safetensors"}),
+                              "strength_model": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+                            }}
+    RETURN_TYPES = ("MODEL",)
+    DESCRIPTION = "Loads a safetensors LoRA from Autumn and applies it to the diffusion model."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "lora", "load lora", "apply lora", "lora loader", "lora model"]
+    FUNCTION = "load_lora_model_only"
+
+    def load_lora_model_only(self, model, lora_uri, strength_model):
+        return (self.load_lora(model, None, lora_uri, strength_model, 0)[0],)
 
 class VAELoader:
     video_taes = ["taehv", "lighttaew2_2", "lighttaew2_1", "lighttaehy1_5", "taeltx_2", "taeh3"]
@@ -861,6 +961,25 @@ class VAELoader:
         # load_taesd) are not addressable by a single vae_path.
         if vae_path is not None:
             vae.patcher.cached_patcher_init = (comfy.sd.load_vae_patcher, (vae_path, metadata, None))
+        return (vae,)
+
+class AutumnVAELoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "vae_uri": ("STRING", {"default": "autumn://autumn/models/vae/model.safetensors"})}}
+    RETURN_TYPES = ("VAE",)
+    FUNCTION = "load_vae"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads a safetensors VAE from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "vae", "load vae"]
+
+    def load_vae(self, vae_uri):
+        validate_autumn_uri(vae_uri, "Autumn VAE")
+        sd, metadata = comfy.utils.load_torch_file(vae_uri, return_metadata=True)
+        vae = comfy.sd.VAE(sd=sd, metadata=metadata)
+        vae.throw_exception_if_invalid()
+        vae.patcher.cached_patcher_init = (comfy.sd.load_vae_patcher, (vae_uri, metadata, None))
         return (vae,)
 
 class ControlNetLoader:
@@ -992,17 +1111,28 @@ class UNETLoader:
     CATEGORY = "model/loaders"
 
     def load_unet(self, unet_name, weight_dtype):
-        model_options = {}
-        if weight_dtype == "fp8_e4m3fn":
-            model_options["dtype"] = torch.float8_e4m3fn
-        elif weight_dtype == "fp8_e4m3fn_fast":
-            model_options["dtype"] = torch.float8_e4m3fn
-            model_options["fp8_optimizations"] = True
-        elif weight_dtype == "fp8_e5m2":
-            model_options["dtype"] = torch.float8_e5m2
+        model_options = model_options_for_weight_dtype(weight_dtype)
 
         unet_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
         model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
+        return (model,)
+
+class AutumnUNETLoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "unet_uri": ("STRING", {"default": "autumn://autumn/models/diffusion_models/model.safetensors"}),
+                              "weight_dtype": (["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"], {"advanced": True})
+                             }}
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load_unet"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads a safetensors diffusion model from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "load diffusion model", "unet"]
+
+    def load_unet(self, unet_uri, weight_dtype):
+        validate_autumn_uri(unet_uri, "Autumn diffusion model")
+        model = comfy.sd.load_diffusion_model(unet_uri, model_options=model_options_for_weight_dtype(weight_dtype))
         return (model,)
 
 class CLIPLoader:
@@ -1024,12 +1154,31 @@ class CLIPLoader:
     def load_clip(self, clip_name, type="stable_diffusion", device="default"):
         clip_type = getattr(comfy.sd.CLIPType, type.upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
 
-        model_options = {}
-        if device == "cpu":
-            model_options["load_device"] = model_options["offload_device"] = torch.device("cpu")
-
         clip_path = folder_paths.get_full_path_or_raise("text_encoders", clip_name)
-        clip = comfy.sd.load_clip(ckpt_paths=[clip_path], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options)
+        clip = comfy.sd.load_clip(ckpt_paths=[clip_path], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options_for_load_device(device))
+        return (clip,)
+
+class AutumnCLIPLoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "clip_uri": ("STRING", {"default": "autumn://autumn/models/text_encoders/model.safetensors"}),
+                              "type": (["stable_diffusion", "stable_cascade", "sd3", "stable_audio", "mochi", "ltxv", "pixart", "cosmos", "lumina2", "wan", "hidream", "chroma", "ace", "omnigen2", "qwen_image", "hunyuan_image", "flux2", "ovis", "longcat_image", "cogvideox", "lens", "pixeldit", "ideogram4", "boogu", "krea2", "joyimage", "mage", "minimax", "yue2"], ),
+                              },
+                "optional": {
+                              "device": (["default", "cpu"], {"advanced": True}),
+                             }}
+    RETURN_TYPES = ("CLIP",)
+    FUNCTION = "load_clip"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads a safetensors text encoder from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "load clip", "text encoder"]
+
+    def load_clip(self, clip_uri, type="stable_diffusion", device="default"):
+        validate_autumn_uri(clip_uri, "Autumn CLIP")
+        clip_type = getattr(comfy.sd.CLIPType, type.upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
+
+        clip = comfy.sd.load_clip(ckpt_paths=[clip_uri], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options_for_load_device(device))
         return (clip,)
 
 class DualCLIPLoader:
@@ -1055,11 +1204,32 @@ class DualCLIPLoader:
         clip_path1 = folder_paths.get_full_path_or_raise("text_encoders", clip_name1)
         clip_path2 = folder_paths.get_full_path_or_raise("text_encoders", clip_name2)
 
-        model_options = {}
-        if device == "cpu":
-            model_options["load_device"] = model_options["offload_device"] = torch.device("cpu")
+        clip = comfy.sd.load_clip(ckpt_paths=[clip_path1, clip_path2], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options_for_load_device(device))
+        return (clip,)
 
-        clip = comfy.sd.load_clip(ckpt_paths=[clip_path1, clip_path2], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options)
+class AutumnDualCLIPLoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "clip_uri1": ("STRING", {"default": "autumn://autumn/models/text_encoders/model1.safetensors"}),
+                              "clip_uri2": ("STRING", {"default": "autumn://autumn/models/text_encoders/model2.safetensors"}),
+                              "type": (["sdxl", "sd3", "flux", "hunyuan_video", "hidream", "hunyuan_image", "hunyuan_video_15", "kandinsky5", "kandinsky5_image", "ltxv", "newbie", "ace"], ),
+                              },
+                "optional": {
+                              "device": (["default", "cpu"], {"advanced": True}),
+                             }}
+    RETURN_TYPES = ("CLIP",)
+    FUNCTION = "load_clip"
+
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Loads two safetensors text encoders from Autumn through an autumn-s3 endpoint."
+    SEARCH_ALIASES = ["autumn", "runai", "s3", "load clip", "dual clip", "text encoder"]
+
+    def load_clip(self, clip_uri1, clip_uri2, type, device="default"):
+        validate_autumn_uri(clip_uri1, "Autumn CLIP")
+        validate_autumn_uri(clip_uri2, "Autumn CLIP")
+        clip_type = getattr(comfy.sd.CLIPType, type.upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
+
+        clip = comfy.sd.load_clip(ckpt_paths=[clip_uri1, clip_uri2], embedding_directory=folder_paths.get_folder_paths("embeddings"), clip_type=clip_type, model_options=model_options_for_load_device(device))
         return (clip,)
 
 class CLIPVisionLoader:
@@ -2068,6 +2238,7 @@ class ImagePadForOutpaint:
 NODE_CLASS_MAPPINGS = {
     "KSampler": KSampler,
     "CheckpointLoaderSimple": CheckpointLoaderSimple,
+    "AutumnCheckpointLoader": AutumnCheckpointLoader,
     "CLIPTextEncode": CLIPTextEncode,
     "CLIPSetLastLayer": CLIPSetLastLayer,
     "VAEDecode": VAEDecode,
@@ -2106,9 +2277,14 @@ NODE_CLASS_MAPPINGS = {
     "LatentFlip": LatentFlip,
     "LatentCrop": LatentCrop,
     "LoraLoader": LoraLoader,
+    "AutumnLoraLoader": AutumnLoraLoader,
+    "AutumnLoraLoaderModelOnly": AutumnLoraLoaderModelOnly,
     "CLIPLoader": CLIPLoader,
+    "AutumnCLIPLoader": AutumnCLIPLoader,
     "UNETLoader": UNETLoader,
+    "AutumnUNETLoader": AutumnUNETLoader,
     "DualCLIPLoader": DualCLIPLoader,
+    "AutumnDualCLIPLoader": AutumnDualCLIPLoader,
     "CLIPVisionEncode": CLIPVisionEncode,
     "StyleModelApply": StyleModelApply,
     "unCLIPConditioning": unCLIPConditioning,
@@ -2127,6 +2303,7 @@ NODE_CLASS_MAPPINGS = {
 
     "CheckpointLoader": CheckpointLoader,
     "DiffusersLoader": DiffusersLoader,
+    "AutumnVAELoader": AutumnVAELoader,
 
     "LoadLatent": LoadLatent,
     "SaveLatent": SaveLatent,
@@ -2143,16 +2320,23 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     # Loaders
     "CheckpointLoader": "Load Checkpoint With Config (DEPRECATED)",
     "CheckpointLoaderSimple": "Load Checkpoint",
+    "AutumnCheckpointLoader": "Load Autumn Checkpoint",
     "VAELoader": "Load VAE",
+    "AutumnVAELoader": "Load Autumn VAE",
     "LoraLoader": "Load LoRA (Model and CLIP)",
+    "AutumnLoraLoader": "Load Autumn LoRA (Model and CLIP)",
     "LoraLoaderModelOnly": "Load LoRA",
+    "AutumnLoraLoaderModelOnly": "Load Autumn LoRA",
     "CLIPLoader": "Load CLIP",
+    "AutumnCLIPLoader": "Load Autumn CLIP",
     "DualCLIPLoader": "Load CLIP (Dual)",
+    "AutumnDualCLIPLoader": "Load Autumn CLIP (Dual)",
     "ControlNetLoader": "Load ControlNet Model",
     "DiffControlNetLoader": "Load ControlNet Model (diff)",
     "StyleModelLoader": "Load Style Model",
     "CLIPVisionLoader": "Load CLIP Vision",
     "UNETLoader": "Load Diffusion Model",
+    "AutumnUNETLoader": "Load Autumn Diffusion Model",
     "unCLIPCheckpointLoader": "Load unCLIP Checkpoint",
     "GLIGENLoader": "Load GLIGEN Model",
     "DiffusersLoader": "Load Diffusers Model (DEPRECATED)",
