@@ -1,41 +1,12 @@
-ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:3c43c273a485d93903dc45bd6b3a43684f6ba152
+ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:7e292fb46743051be9175e780495b842a9a5d43f
 
 FROM ${BASE_IMAGE}
 
-ARG APT_MIRROR=https://mirrors.aliyun.com
-ARG COMFY_PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
-ARG COMFY_PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-
-ENV PIP_INDEX_URL=${COMFY_PIP_INDEX_URL}
-ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
-RUN if [ -n "${APT_MIRROR}" ]; then \
-      if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
-        sed -i "s|http://archive.ubuntu.com|${APT_MIRROR}|g; s|http://security.ubuntu.com|${APT_MIRROR}|g" /etc/apt/sources.list.d/ubuntu.sources; \
-      fi; \
-      if [ -f /etc/apt/sources.list ]; then \
-        sed -i "s|http://archive.ubuntu.com|${APT_MIRROR}|g; s|http://security.ubuntu.com|${APT_MIRROR}|g" /etc/apt/sources.list; \
-      fi; \
-    fi \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
-    && pip install --no-cache-dir --break-system-packages \
-      --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
-      -r /tmp/requirements-no-torch.txt \
-      runai-model-streamer-s3 \
-    && pip install --no-cache-dir --break-system-packages \
-      --timeout 120 --retries 10 \
-      --no-deps --index-url https://download.pytorch.org/whl/cu130 \
-      torchvision torchaudio
+RUN pip uninstall -y runai-model-streamer-s3
 
 COPY . .
 
