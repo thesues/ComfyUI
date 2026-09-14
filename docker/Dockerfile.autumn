@@ -3,9 +3,9 @@ ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:3
 FROM ${BASE_IMAGE}
 
 ARG APT_MIRROR=https://mirrors.aliyun.com
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG COMFY_PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
 
-ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_INDEX_URL=${COMFY_PIP_INDEX_URL}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV AWS_EC2_METADATA_DISABLED=true
