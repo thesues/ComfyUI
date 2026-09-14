@@ -4,6 +4,7 @@ FROM ${BASE_IMAGE}
 
 ARG APT_MIRROR=https://mirrors.aliyun.com
 ARG COMFY_PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
+ARG COMFY_PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 ENV PIP_INDEX_URL=${COMFY_PIP_INDEX_URL}
 ENV DEBIAN_FRONTEND=noninteractive
@@ -28,7 +29,7 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
 COPY requirements.txt .
 RUN sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
     && pip install --no-cache-dir --break-system-packages \
-      --timeout 120 --retries 10 \
+      --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
       -r /tmp/requirements-no-torch.txt \
       runai-model-streamer-s3 \
     && pip install --no-cache-dir --break-system-packages \
