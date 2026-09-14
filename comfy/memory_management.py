@@ -23,14 +23,29 @@ def read_tensor_file_slice_into(tensor, destination, stream=None, destination2=N
                                            destination2=(destination2._qdata if destination2 is not None else None)):
             return False
 
+        source_params = tensor._params
+        destination_params = destination._params if destination is not None else None
+        destination2_params = destination2._params if destination2 is not None else None
+        tensor_fields = source_params._tensor_fields()
+        for field in tensor_fields:
+            source_param = getattr(source_params, field)
+            destination_param = getattr(destination_params, field) if destination_params is not None else None
+            destination2_param = getattr(destination2_params, field) if destination2_params is not None else None
+            if read_tensor_file_slice_into(source_param, destination_param, stream=stream, destination2=destination2_param):
+                continue
+            if destination_param is not None:
+                destination_param.copy_(source_param, non_blocking=False)
+            if destination2_param is not None:
+                destination2_param.copy_(source_param if destination_param is None else destination_param, non_blocking=True)
+
         if destination is not None:
-            dst_orig_dtype = destination._params.orig_dtype
-            destination._params.copy_from(tensor._params, non_blocking=False)
-            destination._params = dataclasses.replace(destination._params, orig_dtype=dst_orig_dtype)
+            destination._params = dataclasses.replace(source_params, **{
+                field: getattr(destination_params, field) for field in tensor_fields
+            }, orig_dtype=destination_params.orig_dtype)
         if destination2 is not None:
-            dst_orig_dtype = destination2._params.orig_dtype
-            destination2._params.copy_from(destination._params if destination is not None else tensor._params, non_blocking=True)
-            destination2._params = dataclasses.replace(destination2._params, orig_dtype=dst_orig_dtype)
+            destination2._params = dataclasses.replace(source_params, **{
+                field: getattr(destination2_params, field) for field in tensor_fields
+            }, orig_dtype=destination2_params.orig_dtype)
         return True
 
     info = getattr(tensor.untyped_storage(), "_comfy_tensor_file_slice", None)

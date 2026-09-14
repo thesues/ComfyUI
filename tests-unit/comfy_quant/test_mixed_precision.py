@@ -4,6 +4,8 @@ import torch
 import sys
 import os
 import json
+import io
+import threading
 from types import SimpleNamespace
 
 # Add comfy to path
@@ -17,6 +19,7 @@ if not has_gpu():
     args.cpu = True
 
 from comfy import ops
+from comfy import memory_management
 from comfy.quant_ops import QUANT_ALGOS, QuantizedTensor
 import comfy.utils
 
@@ -38,6 +41,63 @@ class SimpleModel(torch.nn.Module):
 
 
 class TestMixedPrecisionOps(unittest.TestCase):
+
+    def test_quantized_parameter_does_not_copy_layout_tensors(self):
+        qdata = torch.empty((16, 8), dtype=torch.uint8)
+        scale = torch.ones((), dtype=torch.float32)
+        block_scale = torch.empty((16, 1), dtype=torch.float8_e4m3fn)
+        params = ops.quant_ops.TensorCoreNVFP4Layout.Params(
+            scale=scale,
+            block_scale=block_scale,
+            orig_dtype=torch.bfloat16,
+            orig_shape=(16, 16),
+        )
+
+        source = QuantizedTensor(qdata, "TensorCoreNVFP4Layout", params)
+        weight = ops._make_parameter(source)
+
+        self.assertIs(weight, source)
+        self.assertIsInstance(weight, torch.nn.Parameter)
+        self.assertFalse(weight.requires_grad)
+        self.assertIs(weight._qdata, qdata)
+        self.assertIs(weight._params.scale, scale)
+        self.assertIs(weight._params.block_scale, block_scale)
+
+    def test_quantized_file_slices_are_read_into_layout_tensors(self):
+        qdata = torch.zeros((2, 2), dtype=torch.uint8)
+        scale = torch.zeros((), dtype=torch.float32)
+        block_scale = torch.zeros((2,), dtype=torch.uint8)
+        file_data = bytes([1, 2, 3, 4]) + torch.tensor(2.5).numpy().tobytes() + bytes([5, 6])
+        file_obj = io.BytesIO(file_data)
+        lock = threading.Lock()
+
+        for tensor, offset in ((qdata, 0), (scale, 4), (block_scale, 8)):
+            tensor.untyped_storage()._comfy_tensor_file_slice = memory_management.TensorFileSlice(
+                file_obj, lock, offset, tensor.nbytes
+            )
+
+        params = ops.quant_ops.TensorCoreNVFP4Layout.Params(
+            scale=scale,
+            block_scale=block_scale.view(torch.float8_e4m3fn),
+            orig_dtype=torch.bfloat16,
+            orig_shape=(2, 4),
+        )
+        source = QuantizedTensor(qdata, "TensorCoreNVFP4Layout", params)
+        destination = QuantizedTensor(
+            torch.empty_like(qdata),
+            "TensorCoreNVFP4Layout",
+            ops.quant_ops.TensorCoreNVFP4Layout.Params(
+                scale=torch.empty_like(scale),
+                block_scale=torch.empty_like(block_scale).view(torch.float8_e4m3fn),
+                orig_dtype=torch.bfloat16,
+                orig_shape=(2, 4),
+            ),
+        )
+
+        self.assertTrue(memory_management.read_tensor_file_slice_into(source, destination))
+        self.assertTrue(torch.equal(destination._qdata, torch.tensor([[1, 2], [3, 4]], dtype=torch.uint8)))
+        self.assertEqual(destination._params.scale.item(), 2.5)
+        self.assertTrue(torch.equal(destination._params.block_scale.view(torch.uint8), torch.tensor([5, 6], dtype=torch.uint8)))
 
     def test_all_layers_standard(self):
         """Test that model with no quantization works normally"""

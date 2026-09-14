@@ -1102,11 +1102,19 @@ def _quantized_apply(module, fn, recurse=True):
         p = fn(param)
         if (not torch.is_inference_mode_enabled()) and p.is_inference():
             p = p.clone()
-        module.register_parameter(key, torch.nn.Parameter(p, requires_grad=False))
+        module.register_parameter(key, _make_parameter(p))
     for key, buf in module._buffers.items():
         if buf is not None:
             module._buffers[key] = fn(buf)
     return module
+
+
+def _make_parameter(tensor):
+    if isinstance(tensor, QuantizedTensor):
+        # nn.Parameter calls detach(), which clones QuantizedTensor layout tensors.
+        tensor._is_param = True
+        return tensor
+    return torch.nn.Parameter(tensor, requires_grad=False)
 
 
 def _load_quantized_module(module, super_load, state_dict, prefix, local_metadata, strict,
@@ -1226,10 +1234,9 @@ def _load_quantized_module(module, super_load, state_dict, prefix, local_metadat
             raise ValueError(f"Unsupported quantization format: {module.quant_format}")
 
         params = layout_cls.Params(**scales, orig_dtype=compute_dtype, orig_shape=module._orig_shape)
-        module.weight = torch.nn.Parameter(
-            QuantizedTensor(weight.to(device=device, dtype=qconfig["storage_t"]), module.layout_type, params),
-            requires_grad=False,
-        )
+        module.weight = _make_parameter(QuantizedTensor(
+            weight.to(device=device, dtype=qconfig["storage_t"]), module.layout_type, params
+        ))
 
         if load_extra_params:
             for param_name in qconfig["parameters"]:
@@ -1452,7 +1459,7 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                     return weight
 
                 assert inplace_update is False  # TODO: eventually remove the inplace_update stuff
-                self.weight = torch.nn.Parameter(weight, requires_grad=False)
+                self.weight = _make_parameter(weight)
 
             def _apply(self, fn, recurse=True):  # This is to get torch.compile + moving weights to another device working
                 return _quantized_apply(self, fn, recurse)
@@ -1611,9 +1618,9 @@ def mixed_precision_ops(quant_config={}, compute_dtype=torch.bfloat16, full_prec
                         orig_shape=(self.num_embeddings, self.embedding_dim),
                         **extra,
                     )
-                    self.weight = torch.nn.Parameter(
-                        QuantizedTensor(weight.to(dtype=qconfig["storage_t"]), qconfig["comfy_tensor_layout"], params),
-                        requires_grad=False)
+                    self.weight = _make_parameter(QuantizedTensor(
+                        weight.to(dtype=qconfig["storage_t"]), qconfig["comfy_tensor_layout"], params
+                    ))
                 elif layer_conf is not None:
                     # Unsupported format — restore the marker so it round-trips; fall through to default load.
                     state_dict[f"{prefix}comfy_quant"] = torch.tensor(
