@@ -35,9 +35,6 @@ from comfy.cli_args import args
 import json
 import time
 import threading
-import ipaddress
-import urllib.parse
-import urllib.request
 import warnings
 
 MMAP_TORCH_FILES = args.mmap_torch_files
@@ -86,7 +83,6 @@ _TYPES = {
 }
 
 _SAFETENSORS_MAX_HEADER_SIZE = 100_000_000
-_AUTUMN_SCHEMES = ("autumn://", "s3://")
 
 
 def _invalid_safetensors_error(message, ckpt):
@@ -159,107 +155,10 @@ def load_safetensors(ckpt):
     return sd, header.get("__metadata__", {}),
 
 
-def is_autumn_path(path):
-    path = str(path)
-    return path.startswith(_AUTUMN_SCHEMES)
-
-
-def is_local_autumn_endpoint(endpoint):
-    parsed = urllib.parse.urlparse(endpoint)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
-    if parsed.hostname == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(parsed.hostname).is_loopback
-    except ValueError:
-        return False
-
-
-def autumn_to_s3_uri(path):
-    path = str(path)
-    if path.startswith("autumn://"):
-        parsed = urllib.parse.urlparse(path)
-        return urllib.parse.urlunparse(("s3", parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-    return path
-
-
-def autumn_s3_http_url(uri):
-    endpoint = os.environ.get("AWS_ENDPOINT_URL", "")
-    if not is_local_autumn_endpoint(endpoint):
-        raise ValueError("Autumn model loading requires AWS_ENDPOINT_URL to point at a local autumn-s3 endpoint.")
-    endpoint = endpoint.rstrip("/")
-    parsed = urllib.parse.urlparse(uri)
-    key = parsed.path.lstrip("/")
-    path = urllib.parse.quote(parsed.netloc, safe="") + "/" + urllib.parse.quote(key, safe="/")
-    return endpoint + "/" + path
-
-
-def autumn_safetensors_metadata(uri):
-    url = autumn_s3_http_url(uri)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    req = urllib.request.Request(url, headers={"Range": "bytes=0-7"})
-    with opener.open(req, timeout=30) as f:
-        header = f.read(8)
-    if len(header) < 8:
-        raise _incomplete_safetensors_error("The safetensors header is incomplete.", uri)
-    length_of_header = struct.unpack("<Q", header)[0]
-    if length_of_header > _SAFETENSORS_MAX_HEADER_SIZE:
-        raise _invalid_safetensors_error("The safetensors header is too large.", uri)
-    req = urllib.request.Request(url, headers={"Range": "bytes=8-{}".format(7 + length_of_header)})
-    with opener.open(req, timeout=30) as f:
-        header_data = f.read(length_of_header)
-    if len(header_data) < length_of_header:
-        raise _incomplete_safetensors_error("The safetensors header is incomplete.", uri)
-    try:
-        header_json = json.loads(header_data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise _invalid_safetensors_error(str(e), uri) from e
-    return header_json.get("__metadata__", {})
-
-
-def load_autumn_safetensors(ckpt, device=None):
-    endpoint = os.environ.get("AWS_ENDPOINT_URL", "")
-    if not is_local_autumn_endpoint(endpoint):
-        raise ValueError("Autumn model loading requires AWS_ENDPOINT_URL to point at a local autumn-s3 endpoint.")
-    for proxy in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        if os.environ.get(proxy):
-            raise ValueError("Autumn model loading requires HTTP proxy environment variables to be unset for the ComfyUI process.")
-
-    try:
-        import runai_model_streamer
-    except ImportError as e:
-        raise ImportError("Loading Autumn models requires runai-model-streamer-s3. Install it and run autumn-s3 next to ComfyUI.") from e
-
-    uri = autumn_to_s3_uri(ckpt)
-    tensors = {}
-    with runai_model_streamer.SafetensorsStreamer() as streamer:
-        if uri.lower().endswith((".safetensors", ".sft")):
-            files = [uri]
-            streamer.stream_file(files[0])
-        else:
-            list_safetensors = getattr(runai_model_streamer, "list_safetensors", None)
-            if list_safetensors is None:
-                raise ImportError("Loading an Autumn model directory requires runai_model_streamer.list_safetensors.")
-            files = list(list_safetensors(uri))
-            if len(files) == 0:
-                raise FileNotFoundError("No safetensors files found in Autumn model directory: {}".format(ckpt))
-            streamer.stream_files(files)
-        for name, tensor in streamer.get_tensors():
-            if device is not None and tensor.device != device:
-                tensor = tensor.to(device=device)
-            tensors[name] = tensor
-    metadata = autumn_safetensors_metadata(files[0]) if len(files) > 0 else {}
-    return tensors, metadata
-
-
 def load_torch_file(ckpt, safe_load=False, device=None, return_metadata=False):
     if device is None:
         device = torch.device("cpu")
     metadata = None
-    if is_autumn_path(ckpt):
-        sd, metadata = load_autumn_safetensors(ckpt, device=device)
-        return (sd, metadata) if return_metadata else sd
     if ckpt.lower().endswith(".safetensors") or ckpt.lower().endswith(".sft"):
         try:
             if comfy.memory_management.aimdo_enabled:
