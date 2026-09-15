@@ -57,11 +57,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY . .
 
-# The manager shells out to pip for node installs; point it at a CN mirror so
-# that works without touching the UI settings (it also honours the in-UI
-# override, which persists to config.ini). HF_ENDPOINT routes model downloads
+# The manager shells out to pip for node installs; point it at the volcengine
+# mirror — measured on the cluster at ~300 MB/s vs ~30 MB/s aliyun (same
+# wheel, 3 runs each; ustc/tuna in between). It also honours the in-UI
+# override, which persists to config.ini. HF_ENDPOINT routes model downloads
 # through hf-mirror — huggingface.co is unreachable from this cluster.
-RUN printf '[default]\npip_index_url = https://mirrors.aliyun.com/pypi/simple/\n' \
+RUN printf '[default]\npip_index_url = https://mirrors.ivolces.com/pypi/simple/\n' \
       > custom_nodes/ComfyUI-Manager/config.ini
 ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_MIRROR=https://hf-mirror.com
