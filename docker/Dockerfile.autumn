@@ -12,24 +12,26 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
-# apt layer: only main is needed (ca-certificates + git). The base image's
-# aliyun sources cover universe/multiverse/backports — ~40 MB of indexes
-# never used here — and the CUDA repo inherited from the pytorch base pulls
-# a few MB more per update. Cache mounts keep the debs between builds;
-# docker-clean is removed first or it deletes every .deb and defeats them.
-RUN rm -f /etc/apt/apt.conf.d/docker-clean
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    printf '%s\n' \
-      'deb https://mirrors.aliyun.com/ubuntu/ jammy main restricted' \
-      'deb https://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted' \
-      'deb https://mirrors.aliyun.com/ubuntu/ jammy-security main restricted' \
-      > /etc/apt/sources.list \
-    && rm -f /etc/apt/sources.list.d/cuda-*.list \
-    && apt-get update -o Acquire::Languages=none \
-    && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      git
+# No apt layer: the base already ships the newest ca-certificates and git
+# (apt reported both "already the newest version"), and the CP build agent's
+# egress is ~400 KB/s, so the index refresh alone cost 70-100 s for nothing.
+# Purging git would not shrink the image either — it lives in a base layer.
+
+# torchvision/torchaudio go in FIRST, pinned to the base's torch 2.11.0+cu130,
+# and the whole torch stack is then frozen with a constraints file. Without
+# this, spandrel/kornia pull torchvision from PyPI during the requirements
+# install; pip picks the newest (0.29 -> torch==2.14), backtracks through
+# 0.28/torch 2.13 to 0.27.1/torch 2.12.1, downloading ~1.6 GB of torch wheels
+# plus ~940 MB of nvidia/triton wheels at ~400 KB/s — 60 of the 69 build
+# minutes — and finally REPLACES the base torch, breaking freetoken's
+# torch<2.12 / triton==3.6.0 pins. With the pins pip fails fast instead.
+RUN pip install --break-system-packages \
+      --timeout 120 --retries 10 \
+      --no-deps --index-url https://download.pytorch.org/whl/cu130 \
+      torchvision==0.26.0 torchaudio==2.11.0 \
+    && python3 -c "from importlib.metadata import version as v; print('\n'.join(f'{p}=={v(p)}' for p in ('torch', 'torchvision', 'torchaudio', 'triton')))" \
+      > /etc/pip-torch-constraints.txt \
+    && cat /etc/pip-torch-constraints.txt
 
 COPY requirements.txt .
 # pip's download cache on a BuildKit cache mount: repeat builds skip the
@@ -38,22 +40,14 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
     && pip install --break-system-packages \
       --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
-      -r /tmp/requirements-no-torch.txt \
-    && pip install --break-system-packages \
-      --timeout 120 --retries 10 \
-      --no-deps --index-url https://download.pytorch.org/whl/cu130 \
-      torchvision torchaudio
+      -c /etc/pip-torch-constraints.txt \
+      -r /tmp/requirements-no-torch.txt
 
 # Clone the Manager BEFORE `COPY . .`: it only changes when the pinned
 # upstream moves, so ComfyUI code edits reuse this layer instead of
 # re-cloning from GitHub on every build.
 RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git \
       custom_nodes/ComfyUI-Manager
-
-# git was needed only for that clone; do not ship ~50 MB of VCS in the pod.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get purge -y --auto-remove git
 
 COPY . .
 
