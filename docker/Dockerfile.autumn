@@ -12,6 +12,31 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
+# TEMPORARY speed probe — revert after reading the numbers.
+RUN python3 - <<'EOF'
+import re, socket, time, urllib.parse, urllib.request
+PKG, FILE = "comfyui-workflow-templates-media-api", "comfyui_workflow_templates_media_api-0.3.84-py3-none-any.whl"
+for idx in ["https://pypi.org/simple/", "https://mirrors.ivolces.com/pypi/simple/", "https://mirrors.volces.com/pypi/simple/",
+            "https://mirrors.aliyun.com/pypi/simple/", "https://pypi.tuna.tsinghua.edu.cn/simple/"]:
+    try:
+        page = urllib.request.urlopen(idx + PKG + "/", timeout=20).read().decode()
+        href = re.search(r'href="([^"#]*' + re.escape(FILE) + ')', page).group(1)
+        url = urllib.parse.urljoin(idx + PKG + "/", href)
+        host = urllib.parse.urlparse(url).hostname
+        ip = socket.gethostbyname(host)
+        r = urllib.request.urlopen(url, timeout=20)
+        n, t0 = 0, time.time()
+        while time.time() - t0 < 45:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            n += len(b)
+        dt = time.time() - t0
+        print(f"PROBE {idx} -> {host} ({ip}): {n/1e6:.1f} MB in {dt:.1f}s = {n/1e6/dt:.2f} MB/s", flush=True)
+    except Exception as e:
+        print(f"PROBE {idx}: ERROR {e!r}", flush=True)
+EOF
+
 # No apt layer: the base already ships the newest ca-certificates and git
 # (apt reported both "already the newest version"), and the CP build agent's
 # egress is ~400 KB/s, so the index refresh alone cost 70-100 s for nothing.
