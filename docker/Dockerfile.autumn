@@ -2,8 +2,11 @@ ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:3
 
 FROM ${BASE_IMAGE}
 
+# ivolces ONLY — no aliyun extra index. Probed from the CP build agent with
+# the same 100 MB wheel: ivolces 480 MB/s, volces (public) 13.6 MB/s, aliyun
+# 0.18 MB/s, pypi.org 0.04 MB/s. With aliyun as --extra-index-url pip took
+# the identical file from aliyun, so the requirements step ran 16-65 min.
 ARG COMFY_PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
-ARG COMFY_PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 ENV PIP_INDEX_URL=${COMFY_PIP_INDEX_URL}
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,34 +15,9 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
-# TEMPORARY speed probe — revert after reading the numbers.
-RUN python3 - <<'EOF'
-import re, socket, time, urllib.parse, urllib.request
-PKG, FILE = "comfyui-workflow-templates-media-api", "comfyui_workflow_templates_media_api-0.3.84-py3-none-any.whl"
-for idx in ["https://pypi.org/simple/", "https://mirrors.ivolces.com/pypi/simple/", "https://mirrors.volces.com/pypi/simple/",
-            "https://mirrors.aliyun.com/pypi/simple/", "https://pypi.tuna.tsinghua.edu.cn/simple/"]:
-    try:
-        page = urllib.request.urlopen(idx + PKG + "/", timeout=20).read().decode()
-        href = re.search(r'href="([^"#]*' + re.escape(FILE) + ')', page).group(1)
-        url = urllib.parse.urljoin(idx + PKG + "/", href)
-        host = urllib.parse.urlparse(url).hostname
-        ip = socket.gethostbyname(host)
-        r = urllib.request.urlopen(url, timeout=20)
-        n, t0 = 0, time.time()
-        while time.time() - t0 < 45:
-            b = r.read(1 << 20)
-            if not b:
-                break
-            n += len(b)
-        dt = time.time() - t0
-        print(f"PROBE {idx} -> {host} ({ip}): {n/1e6:.1f} MB in {dt:.1f}s = {n/1e6/dt:.2f} MB/s", flush=True)
-    except Exception as e:
-        print(f"PROBE {idx}: ERROR {e!r}", flush=True)
-EOF
-
 # No apt layer: the base already ships the newest ca-certificates and git
-# (apt reported both "already the newest version"), and the CP build agent's
-# egress is ~400 KB/s, so the index refresh alone cost 70-100 s for nothing.
+# (apt reported both "already the newest version"), and the aliyun apt mirror
+# is ~400 KB/s from the CP build agent: the index refresh cost 70-100 s.
 # Purging git would not shrink the image either — it lives in a base layer.
 
 # torchvision/torchaudio go in FIRST, pinned to the base's torch 2.11.0+cu130,
@@ -47,7 +25,7 @@ EOF
 # this, spandrel/kornia pull torchvision from PyPI during the requirements
 # install; pip picks the newest (0.29 -> torch==2.14), backtracks through
 # 0.28/torch 2.13 to 0.27.1/torch 2.12.1, downloading ~1.6 GB of torch wheels
-# plus ~940 MB of nvidia/triton wheels at ~400 KB/s — 60 of the 69 build
+# plus ~940 MB of nvidia/triton wheels from aliyun — 60 of the 69 build
 # minutes — and finally REPLACES the base torch, breaking freetoken's
 # torch<2.12 / triton==3.6.0 pins. With the pins pip fails fast instead.
 RUN pip install --break-system-packages \
@@ -69,7 +47,7 @@ COPY requirements.txt manager_requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
     && pip install --break-system-packages \
-      --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
+      --timeout 120 --retries 10 \
       -c /etc/pip-torch-constraints.txt \
       -r /tmp/requirements-no-torch.txt \
       -r manager_requirements.txt
