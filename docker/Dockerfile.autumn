@@ -38,6 +38,23 @@ RUN sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt >
 
 COPY . .
 
+# ComfyUI-Manager: custom-node/model manager. Without it there is no way to
+# install anything from the UI — a missing model just gets a browser link
+# instead of a download into the (autumn-backed) models tree.
+# git is already installed above; Comfy-Org is the maintained home of the
+# manager (ltdrdata/ComfyUI-Manager redirects here).
+RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git \
+      custom_nodes/ComfyUI-Manager
+
+# The manager shells out to pip for node installs; point it at a CN mirror so
+# that works without touching the UI settings (it also honours the in-UI
+# override, which persists to config.ini). HF_ENDPOINT routes model downloads
+# through hf-mirror — huggingface.co is unreachable from this cluster.
+RUN printf '[default]\npip_index_url = https://mirrors.aliyun.com/pypi/simple/\n' \
+      > custom_nodes/ComfyUI-Manager/config.ini
+ENV HF_ENDPOINT=https://hf-mirror.com \
+    HF_MIRROR=https://hf-mirror.com
+
 EXPOSE 8188
 
 CMD ["python3", "main.py", "--listen", "0.0.0.0"]
