@@ -49,12 +49,17 @@ RUN pip install --break-system-packages \
 COPY requirements.txt manager_requirements.txt ./
 # Download caches on BuildKit cache mounts: repeat builds on the same agent
 # skip the download without paying image size (cache mounts never enter a
-# layer). The final find_spec check fails the build if uv --system wrote to a
+# layer). uv itself is fetched from ivolces alone first — with aliyun listed,
+# pip took the 20 MB wheel from aliyun at 222 KB/s (88 s, run #21) — and only
+# falls back to aliyun if ivolces cannot serve it.
+# The final find_spec check fails the build if uv --system wrote to a
 # different site-packages than the one python3 imports from.
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    pip install --break-system-packages --timeout 120 --retries 10 \
-      --extra-index-url ${COMFY_PIP_FALLBACK_INDEX_URL} uv \
+    { pip install --break-system-packages --timeout 120 --retries 10 \
+        --index-url ${COMFY_PIP_INDEX_URL} uv \
+      || pip install --break-system-packages --timeout 120 --retries 10 \
+        --index-url ${COMFY_PIP_INDEX_URL} --extra-index-url ${COMFY_PIP_FALLBACK_INDEX_URL} uv; } \
     && sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
     && UV_HTTP_TIMEOUT=120 UV_LINK_MODE=copy uv pip install --system --break-system-packages \
       --index ${COMFY_PIP_INDEX_URL} \
