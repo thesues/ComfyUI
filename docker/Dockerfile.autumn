@@ -12,6 +12,11 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 WORKDIR /opt/ComfyUI
 
+# apt layer: only main is needed (ca-certificates + git). The base image's
+# aliyun sources cover universe/multiverse/backports — ~40 MB of indexes
+# never used here — and the CUDA repo inherited from the pytorch base pulls
+# a few MB more per update. Cache mounts keep the debs between builds;
+# docker-clean is removed first or it deletes every .deb and defeats them.
 RUN rm -f /etc/apt/apt.conf.d/docker-clean
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -24,28 +29,33 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get update -o Acquire::Languages=none \
     && apt-get install -y --no-install-recommends \
       ca-certificates \
-      git \
-      && rm -rf /var/lib/apt/lists/*
+      git
 
 COPY requirements.txt .
-RUN sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
-    && pip install --no-cache-dir --break-system-packages \
+# pip's download cache on a BuildKit cache mount: repeat builds skip the
+# download without paying image size (cache mounts never enter a layer).
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    sed -E '/^(torch|torchvision|torchaudio)([<>=~! ].*)?$/d' requirements.txt > /tmp/requirements-no-torch.txt \
+    && pip install --break-system-packages \
       --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
       -r /tmp/requirements-no-torch.txt \
-    && pip install --no-cache-dir --break-system-packages \
+    && pip install --break-system-packages \
       --timeout 120 --retries 10 \
       --no-deps --index-url https://download.pytorch.org/whl/cu130 \
       torchvision torchaudio
 
-COPY . .
-
-# ComfyUI-Manager: custom-node/model manager. Without it there is no way to
-# install anything from the UI — a missing model just gets a browser link
-# instead of a download into the (autumn-backed) models tree.
-# git is already installed above; Comfy-Org is the maintained home of the
-# manager (ltdrdata/ComfyUI-Manager redirects here).
+# Clone the Manager BEFORE `COPY . .`: it only changes when the pinned
+# upstream moves, so ComfyUI code edits reuse this layer instead of
+# re-cloning from GitHub on every build.
 RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git \
       custom_nodes/ComfyUI-Manager
+
+# git was needed only for that clone; do not ship ~50 MB of VCS in the pod.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get purge -y --auto-remove git
+
+COPY . .
 
 # The manager shells out to pip for node installs; point it at a CN mirror so
 # that works without touching the UI settings (it also honours the in-UI

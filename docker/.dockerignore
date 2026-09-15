@@ -1,0 +1,7 @@
+.git
+tests
+tests-unit
+script_examples
+docker
+*.md
+!README.md
