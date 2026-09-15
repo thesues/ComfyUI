@@ -12,7 +12,7 @@
 # Home: this repo, next to docker/Dockerfile.autumn — changing the image
 # usually means changing how it is deployed. Apply with the tag the pipeline
 # produced (tag = the autumn-dev commit the run built):
-#   sed "s|comfyui-autumn:c41f7a8f6f24d79a0a9523931e5a03f13444c6f2|\
+#   sed "s|comfyui-autumn:a65cdc62a75cb183b5af8d044cf9e2d55e3fc661|\
 #        dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:<tag>|" \
 #     k8s/comfyui-autumn.yaml | kubectl apply -f -
 # Check `kubectl diff` first: live is the source of truth for anything patched
@@ -122,7 +122,7 @@ spec:
         command:
         - bash
         - -lc
-        image: dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:c41f7a8f6f24d79a0a9523931e5a03f13444c6f2
+        image: dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:a65cdc62a75cb183b5af8d044cf9e2d55e3fc661
         imagePullPolicy: IfNotPresent
         name: comfyui
         ports:
