@@ -33,7 +33,12 @@ RUN pip install --break-system-packages \
       > /etc/pip-torch-constraints.txt \
     && cat /etc/pip-torch-constraints.txt
 
-COPY requirements.txt .
+# The Manager comes from PyPI (manager_requirements.txt pins comfyui_manager),
+# not a git clone: the CP build agent cannot reach github.com at all (run #17
+# timed out connecting to port 443). As a package it lives in site-packages,
+# so the deployment's bind mount over custom_nodes cannot hide it; it is
+# switched on with --enable-manager.
+COPY requirements.txt manager_requirements.txt ./
 # pip's download cache on a BuildKit cache mount: repeat builds skip the
 # download without paying image size (cache mounts never enter a layer).
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
@@ -41,26 +46,23 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && pip install --break-system-packages \
       --timeout 120 --retries 10 --extra-index-url ${COMFY_PIP_EXTRA_INDEX_URL} \
       -c /etc/pip-torch-constraints.txt \
-      -r /tmp/requirements-no-torch.txt
-
-# Clone the Manager BEFORE `COPY . .`: it only changes when the pinned
-# upstream moves, so ComfyUI code edits reuse this layer instead of
-# re-cloning from GitHub on every build.
-RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git \
-      custom_nodes/ComfyUI-Manager
+      -r /tmp/requirements-no-torch.txt \
+      -r manager_requirements.txt
 
 COPY . .
 
-# The manager shells out to pip for node installs; point it at the volcengine
-# mirror — measured on the cluster at ~300 MB/s vs ~30 MB/s aliyun (same
-# wheel, 3 runs each; ustc/tuna in between). It also honours the in-UI
-# override, which persists to config.ini. HF_ENDPOINT routes model downloads
-# through hf-mirror — huggingface.co is unreachable from this cluster.
-RUN printf '[default]\npip_index_url = https://mirrors.ivolces.com/pypi/simple/\n' \
-      > custom_nodes/ComfyUI-Manager/config.ini
-ENV HF_ENDPOINT=https://hf-mirror.com \
+# Node installs from the Manager run through uv by default (comfyui_manager
+# depends on uv), which ignores PIP_INDEX_URL — so set both. ivolces measured
+# on the cluster at ~300 MB/s vs ~30 MB/s aliyun (same wheel, 3 runs each).
+# The constraints keep a node's requirements from swapping out the base torch
+# the way the build once did. HF_ENDPOINT routes model downloads through
+# hf-mirror — huggingface.co is unreachable from this cluster.
+ENV UV_INDEX_URL=${COMFY_PIP_INDEX_URL} \
+    PIP_CONSTRAINT=/etc/pip-torch-constraints.txt \
+    UV_CONSTRAINT=/etc/pip-torch-constraints.txt \
+    HF_ENDPOINT=https://hf-mirror.com \
     HF_MIRROR=https://hf-mirror.com
 
 EXPOSE 8188
 
-CMD ["python3", "main.py", "--listen", "0.0.0.0"]
+CMD ["python3", "main.py", "--listen", "0.0.0.0", "--enable-manager"]

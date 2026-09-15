@@ -93,7 +93,7 @@ spec:
 
             mkdir -p /opt/ComfyUI/user/default/workflows /opt/ComfyUI/user/default/subgraphs
             [ -f /opt/ComfyUI/user/default/comfy.templates.json ] || printf '{}\n' > /opt/ComfyUI/user/default/comfy.templates.json
-            exec python3 main.py --listen 0.0.0.0 --port 8188
+            exec python3 main.py --listen 0.0.0.0 --port 8188 --enable-manager
         ports:
         - containerPort: 8188
           name: http
