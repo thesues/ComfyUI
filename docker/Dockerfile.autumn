@@ -72,6 +72,14 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 COPY . .
 
+# Model downloads from the UI go to ModelScope first (28 MB/s from this
+# cluster vs 12 MB/s hf-mirror on the same 100 MB file), falling back to
+# HF_ENDPOINT for repos it does not carry. HF_ENDPOINT itself stays on
+# hf-mirror because huggingface_hub needs a real Hub API and ModelScope's
+# compatibility stops at the file paths.
+RUN python3 docker/patch-manager-model-mirror.py
+ENV COMFY_MODEL_MIRROR=https://www.modelscope.cn
+
 # ComfyUI listens on 0.0.0.0, so the Manager's default network_mode=public
 # refuses node installs ("network_mode must be set to personal_cloud").
 # personal_cloud is safe here only because every external request passes the
