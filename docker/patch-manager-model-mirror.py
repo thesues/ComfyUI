@@ -13,8 +13,25 @@ than silently shipping an unpatched Manager.
 """
 
 import pathlib
+import sys
+import sysconfig
 
-from comfyui_manager.common import manager_downloader
+RELATIVE = "comfyui_manager/common/manager_downloader.py"
+
+
+def find_source() -> pathlib.Path:
+    """Locate the installed module by path.
+
+    Importing it would pull in comfyui_manager/__init__.py, which imports
+    comfy.cli_args — not importable during the build, where the ComfyUI root
+    is not on sys.path.
+    """
+    roots = [sysconfig.get_paths()[k] for k in ("purelib", "platlib")] + sys.path
+    for root in roots:
+        candidate = pathlib.Path(root) / RELATIVE
+        if candidate.is_file():
+            return candidate
+    raise SystemExit(f"cannot find {RELATIVE} in {roots}")
 
 OLD = """def download_url(model_url: str, model_dir: str, filename: str):
     if HF_ENDPOINT:
@@ -61,7 +78,7 @@ def download_url(model_url: str, model_dir: str, filename: str):
 
 
 def main() -> None:
-    path = pathlib.Path(manager_downloader.__file__)
+    path = find_source()
     src = path.read_text()
 
     if "COMFY_MODEL_MIRROR" in src:
