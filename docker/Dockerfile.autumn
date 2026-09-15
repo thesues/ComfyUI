@@ -72,6 +72,15 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 COPY . .
 
+# ComfyUI listens on 0.0.0.0, so the Manager's default network_mode=public
+# refuses node installs ("network_mode must be set to personal_cloud").
+# personal_cloud is safe here only because every external request passes the
+# nginx auth proxy (comfyui-auth-proxy) in front of this pod. user/ is not
+# bind-mounted by the live deployment, so this file is the one the Manager
+# reads; it fills every other key with its defaults.
+RUN mkdir -p user/__manager \
+    && printf '[default]\nnetwork_mode = personal_cloud\n' > user/__manager/config.ini
+
 # Node installs from the Manager run through uv by default (comfyui_manager
 # depends on uv), which ignores PIP_INDEX_URL — so set both. ivolces measured
 # on the cluster at ~300 MB/s vs ~30 MB/s aliyun (same wheel, 3 runs each).
