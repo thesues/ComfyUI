@@ -1,4 +1,10 @@
-ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:3c43c273a485d93903dc45bd6b3a43684f6ba152
+# BASE_IMAGE carries the embedded autumn client: this image is built FROM
+# freetoken-l3, so whatever autumn that image was built against is what
+# ComfyUI talks to the cluster with. Bumped 2026-09-20 off the 3c43c273
+# lineage, which carried a wire-40 client and was being REFUSED by the
+# cluster outright (local=[40,40] peer=[43,45], no common wire version).
+# The replacement is built against autumn-rs e7a554fa (wire 45).
+ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:87141c68f1f46995cb09a0621e3686dad01fb33c
 
 FROM ${BASE_IMAGE}
 
