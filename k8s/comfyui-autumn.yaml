@@ -122,9 +122,19 @@ spec:
         command:
         - bash
         - -lc
-        image: dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:a65cdc62a75cb183b5af8d044cf9e2d55e3fc661
+        image: dongmao-test-cn-beijing.cr.volces.com/dongmao-test/comfyui-autumn:080aa7406ceba67e9e72144e97af1d72120ac819
         imagePullPolicy: IfNotPresent
         name: comfyui
+        startupProbe:
+          httpGet: { path: /system_stats, port: 8188 }
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 120
+        readinessProbe:
+          httpGet: { path: /system_stats, port: 8188 }
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 3
         ports:
         - containerPort: 8188
           name: http
