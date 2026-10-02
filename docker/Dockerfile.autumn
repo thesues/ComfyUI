@@ -1,10 +1,11 @@
-# BASE_IMAGE carries the embedded autumn client: this image is built FROM
-# freetoken-l3, so whatever autumn that image was built against is what
-# ComfyUI talks to the cluster with. Bumped 2026-09-20 off the 3c43c273
-# lineage, which carried a wire-40 client and was being REFUSED by the
-# cluster outright (local=[40,40] peer=[43,45], no common wire version).
-# The replacement is built against autumn-rs e7a554fa (wire 45).
-ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-l3:87141c68f1f46995cb09a0621e3686dad01fb33c
+# The production FreeToken image (CUDA, torch, FreeToken), NOT freetoken-l3.
+# freetoken-l3 is the same image plus autumn's PyO3 client, which ComfyUI never
+# imports: it reaches autumn only through the autumn-fuse mount, whose binary
+# the deployment's initContainer copies out of the autumn-rs image. Building on
+# freetoken-l3 tied this image to the cluster's wire version for nothing (it
+# was refused once already, wire 40 vs 43-45, and PROTOCOL_HELLO would have
+# meant another rebuild). Same base freetoken-l3 itself builds on.
+ARG BASE_IMAGE=dongmao-test-cn-beijing.cr.volces.com/dongmao-test/freetoken-autumn:9533ade8cda700c5f9c996b9098ff27527441f1e
 
 FROM ${BASE_IMAGE}
 
